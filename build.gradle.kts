@@ -19,6 +19,7 @@ dependencies {
 	implementation("org.springframework.boot:spring-boot-starter-web")
 	implementation("org.springframework.session:spring-session-core")
 	testImplementation("org.springframework.boot:spring-boot-starter-test")
+	implementation("net.dv8tion:JDA:5.0.0-beta.20")
 }
 
 tasks.withType<Test> {
