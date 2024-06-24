@@ -2,9 +2,10 @@ package com.lillyr013.b4discord;
 
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import net.dv8tion.jda.api.JDA;
 import net.dv8tion.jda.api.JDABuilder;
-import net.dv8tion.jda.api.entities.Message;
-import net.dv8tion.jda.api.entities.User;
+import net.dv8tion.jda.api.entities.*;
+import net.dv8tion.jda.api.entities.channel.unions.AudioChannelUnion;
 import net.dv8tion.jda.api.events.message.MessageReceivedEvent;
 import net.dv8tion.jda.api.hooks.ListenerAdapter;
 import net.dv8tion.jda.api.requests.GatewayIntent;
@@ -19,6 +20,7 @@ import java.nio.file.Files;
 import java.nio.file.Paths;
 import java.util.EnumSet;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 
 @SpringBootApplication
@@ -26,6 +28,7 @@ import java.util.Map;
 public class B4DiscordApplication extends ListenerAdapter {
 
 	public static HashMap<String, String> userLastMessage = new HashMap<>();
+	public static JDA jda;
 
 	public static void main(String[] args) {
 
@@ -54,7 +57,7 @@ public class B4DiscordApplication extends ListenerAdapter {
 				GatewayIntent.MESSAGE_CONTENT
 		);
 
-		JDABuilder.createDefault(token, intents)
+		jda = JDABuilder.createDefault(token, intents)
 				.addEventListeners(new B4DiscordApplication())
 				.build();
 		SpringApplication.run(B4DiscordApplication.class, args);
@@ -95,6 +98,41 @@ public class B4DiscordApplication extends ListenerAdapter {
 
 		return userLastMessage.getOrDefault(userID, "No messages detected!");
 
+	}
+
+	@GetMapping("/voiceChannel/{userID}")
+	public String getVoiceChannel(@PathVariable String userID) {
+
+		User user = jda.getUserById(userID);
+		if(user == null) {
+			return "User not found";
+		}
+
+		List<Guild> sharedGuilds = user.getMutualGuilds();
+		if(sharedGuilds.isEmpty()) {
+			return "No shared server";
+		}
+
+		for(Guild g : sharedGuilds) {
+			Member m = g.getMember(UserSnowflake.fromId(userID));
+			if(m == null) {
+				return "Error viewing member - insufficient permissions?";
+			}
+			GuildVoiceState memberVoiceState = m.getVoiceState();
+			if(memberVoiceState == null) {
+				return "Error viewing member voice state - insufficient permissions?";
+			}
+			else {
+				if(memberVoiceState.inAudioChannel()) {
+					AudioChannelUnion voiceChannel = memberVoiceState.getChannel();
+					if(voiceChannel == null) {
+						return "Error viewing voice channel id - insufficient permissions?";
+					}
+					return voiceChannel.getId();
+				}
+			}
+		}
+		return "No VC found";
 	}
 
 }
