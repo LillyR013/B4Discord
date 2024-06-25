@@ -8,15 +8,21 @@ import net.dv8tion.jda.api.entities.*;
 import net.dv8tion.jda.api.entities.channel.unions.AudioChannelUnion;
 import net.dv8tion.jda.api.events.message.MessageReceivedEvent;
 import net.dv8tion.jda.api.hooks.ListenerAdapter;
+import net.dv8tion.jda.api.managers.AudioManager;
+import net.dv8tion.jda.api.managers.channel.concrete.VoiceChannelManager;
 import net.dv8tion.jda.api.requests.GatewayIntent;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.bind.annotation.GetMapping;
 
 import java.io.IOException;
 import java.io.InputStream;
+import java.net.HttpURLConnection;
+import java.net.URI;
+import java.net.URL;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Paths;
@@ -34,36 +40,43 @@ public class B4DiscordApplication extends ListenerAdapter {
 
 	public static void main(String[] args) {
 
-		ObjectMapper objectMapper = new ObjectMapper();
-		Map<String, String> configValues = new HashMap<>();
-		byte[] mapData = {};
-		try {
-			mapData = Files.readAllBytes(Paths.get("botConfig.json"));
-		} catch (IOException e) {
+        String configJSON = "";
+        try {
+            configJSON = Files.readString(Paths.get("botConfig.json"));
+        } catch (IOException e) {
+            System.out.println("Failed to read config file");
+            System.exit(1);
+        }
+        Map<String, String> configValues = parseJSON(configJSON);
+
+		if(configValues == null) {
 			System.out.println("Failed to read config file");
-			System.exit(2);
+			System.exit(1);
 		}
 
+        String token = configValues.get("token");
+
+        EnumSet<GatewayIntent> intents = EnumSet.of(
+                GatewayIntent.GUILD_MESSAGES,
+                GatewayIntent.GUILD_VOICE_STATES,
+                GatewayIntent.MESSAGE_CONTENT
+        );
+
+        jda = JDABuilder.createDefault(token, intents)
+                .addEventListeners(new B4DiscordApplication())
+                .build();
+        SpringApplication.run(B4DiscordApplication.class, args);
+
+    }
+
+	public static Map<String, String> parseJSON(String JSON) {
+		ObjectMapper objectMapper = new ObjectMapper();
+		byte[] mapData = JSON.getBytes();
 		try {
-			configValues = objectMapper.readValue(mapData, new TypeReference<HashMap<String,String>>() {});
+			return objectMapper.readValue(mapData, new TypeReference<HashMap<String,String>>() {});
 		} catch (IOException e) {
-			System.out.println("Failed to process config file");
-			System.exit(3);
+			return null;
 		}
-
-		String token = configValues.get("token");
-
-		EnumSet<GatewayIntent> intents = EnumSet.of(
-				GatewayIntent.GUILD_MESSAGES,
-				GatewayIntent.GUILD_VOICE_STATES,
-				GatewayIntent.MESSAGE_CONTENT
-		);
-
-		jda = JDABuilder.createDefault(token, intents)
-				.addEventListeners(new B4DiscordApplication())
-				.build();
-		SpringApplication.run(B4DiscordApplication.class, args);
-
 	}
 
 	@Override
@@ -127,48 +140,90 @@ public class B4DiscordApplication extends ListenerAdapter {
 		}
 	}
 
-	@GetMapping("/lastMessage/{userID}")
-	public String getLastMessage(@PathVariable String userID) {
-
-		return userLastMessage.getOrDefault(userID, "No messages detected!");
-
+	public Map<String, String> getUserObject(String token) {
+		URI path = URI.create("https://discord.com/api/users/@me");
+		String userJSON = "";
+		try {
+			URL url = path.toURL();
+			HttpURLConnection con = (HttpURLConnection) url.openConnection();
+			con.setRequestMethod("GET");
+			con.setRequestProperty("Authorization", "Bearer " + token);
+			con.connect();
+			InputStream resp = con.getInputStream();
+			userJSON = new String(resp.readAllBytes(), StandardCharsets.UTF_8);
+			con.disconnect();
+		} catch (IOException e) {
+			System.out.println("Issue with connecting to Discord API");
+		}
+		if(userJSON.isEmpty()) {
+			return null;
+		}
+		else {
+			return parseJSON(userJSON);
+		}
 	}
 
-	@GetMapping("/voiceChannel/{userID}")
-	public String getVoiceChannel(@PathVariable String userID) {
+	@PostMapping("/join/{token}")
+	public void join(@PathVariable String token) {
+		Map<String, String> userObj = getUserObject(token);
+		if(userObj != null) {
+			AudioChannelUnion vc = getAudioChannelUnion(userObj.get("id"));
+			if(vc != null) {
+				AudioManager manager = vc.getGuild().getAudioManager();
+				manager.openAudioConnection(vc.asVoiceChannel());
+			}
+		}
+    }
 
-		User user = jda.getUserById(userID);
+	@GetMapping("/lastMessage/{token}")
+	public String getLastMessage(@PathVariable String token) {
+		Map<String, String> userObj = getUserObject(token);
+		if(userObj != null) {
+			return userLastMessage.getOrDefault(userObj.get("id"), "No messages detected!");
+		}
+		return "Not Authorized";
+	}
+
+	public static AudioChannelUnion getAudioChannelUnion(String id) {
+		User user = jda.getUserById(id);
 		if(user == null) {
-			return "User not found";
+			return null;
 		}
 
 		List<Guild> sharedGuilds = user.getMutualGuilds();
 		if(sharedGuilds.isEmpty()) {
-			return "No shared server";
+			return null;
 		}
 
 		for(Guild g : sharedGuilds) {
-			Member m = g.getMember(UserSnowflake.fromId(userID));
-			if(m == null) {
-				return "Error viewing member - insufficient permissions?";
+			Member m = g.getMember(UserSnowflake.fromId(id));
+			if (m == null) {
+				continue;
 			}
 			GuildVoiceState memberVoiceState = m.getVoiceState();
-			if(memberVoiceState == null) {
-				return "Error viewing member voice state - insufficient permissions?";
-			}
-			else {
-				if(memberVoiceState.inAudioChannel()) {
-					AudioChannelUnion voiceChannel = memberVoiceState.getChannel();
-					if(voiceChannel == null) {
-						return "Error viewing voice channel id - insufficient permissions?";
-					}
-					String response = "Voice channel ID: " + voiceChannel.getId();
-					response += "</br>Voice channel name is #" + voiceChannel.getName();
-					return response;
+			if (memberVoiceState != null) {
+				if (memberVoiceState.inAudioChannel()) {
+					return memberVoiceState.getChannel();
 				}
 			}
 		}
-		return "No VC found";
+		return null;
+	}
+
+	@GetMapping("/voiceChannel/{token}")
+	public String getVoiceChannel(@PathVariable String token) {
+		Map<String, String> userObj = getUserObject(token);
+		if(userObj == null) {
+			return "Not Authorized";
+		}
+		AudioChannelUnion voiceChannel = getAudioChannelUnion(userObj.get("id"));
+		if(voiceChannel == null) {
+			return "No voice channel Found";
+		}
+		String response = "Voice channel ID: " + voiceChannel.getId();
+		response += "</br>Voice channel name is #" + voiceChannel.getName();
+		return response;
+
 	}
 
 }
