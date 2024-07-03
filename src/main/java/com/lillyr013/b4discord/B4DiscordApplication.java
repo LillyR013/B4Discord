@@ -1,6 +1,6 @@
 package com.lillyr013.b4discord;
 
-import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import net.dv8tion.jda.api.JDA;
 import net.dv8tion.jda.api.JDABuilder;
@@ -9,7 +9,6 @@ import net.dv8tion.jda.api.entities.channel.unions.AudioChannelUnion;
 import net.dv8tion.jda.api.events.message.MessageReceivedEvent;
 import net.dv8tion.jda.api.hooks.ListenerAdapter;
 import net.dv8tion.jda.api.managers.AudioManager;
-import net.dv8tion.jda.api.managers.channel.concrete.VoiceChannelManager;
 import net.dv8tion.jda.api.requests.GatewayIntent;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
@@ -29,7 +28,6 @@ import java.nio.file.Paths;
 import java.util.EnumSet;
 import java.util.HashMap;
 import java.util.List;
-import java.util.Map;
 
 @SpringBootApplication
 @RestController
@@ -37,6 +35,8 @@ public class B4DiscordApplication extends ListenerAdapter {
 
 	public static HashMap<String, String> userLastMessage = new HashMap<>();
 	public static JDA jda;
+	public static ObjectMapper mapper = new ObjectMapper();
+	public static Config configValues;
 
 	public static void main(String[] args) {
 
@@ -47,14 +47,14 @@ public class B4DiscordApplication extends ListenerAdapter {
             System.out.println("Failed to read config file");
             System.exit(1);
         }
-        Map<String, String> configValues = parseJSON(configJSON);
+        try {
+            configValues = mapper.readValue(configJSON, Config.class);
+        } catch (JsonProcessingException e) {
+            System.out.println("Failed to parse config json");
+			System.exit(2);
+        }
 
-		if(configValues == null) {
-			System.out.println("Failed to read config file");
-			System.exit(1);
-		}
-
-        String token = configValues.get("token");
+        String token = configValues.token;
 
         EnumSet<GatewayIntent> intents = EnumSet.of(
                 GatewayIntent.GUILD_MESSAGES,
@@ -68,16 +68,6 @@ public class B4DiscordApplication extends ListenerAdapter {
         SpringApplication.run(B4DiscordApplication.class, args);
 
     }
-
-	public static Map<String, String> parseJSON(String JSON) {
-		ObjectMapper objectMapper = new ObjectMapper();
-		byte[] mapData = JSON.getBytes();
-		try {
-			return objectMapper.readValue(mapData, new TypeReference<HashMap<String,String>>() {});
-		} catch (IOException e) {
-			return null;
-		}
-	}
 
 	@Override
 	public void onMessageReceived(MessageReceivedEvent event) {
@@ -140,7 +130,7 @@ public class B4DiscordApplication extends ListenerAdapter {
 		}
 	}
 
-	public Map<String, String> getUserObject(String token) {
+	public UserData getUserObject(String token) {
 		URI path = URI.create("https://discord.com/api/users/@me");
 		String userJSON = "";
 		try {
@@ -156,18 +146,25 @@ public class B4DiscordApplication extends ListenerAdapter {
 			System.out.println("Issue with connecting to Discord API");
 		}
 		if(userJSON.isEmpty()) {
+			System.out.println("No response from Discord API...");
 			return null;
 		}
 		else {
-			return parseJSON(userJSON);
-		}
+            try {
+				System.out.println(userJSON);
+                return mapper.readValue(userJSON, UserData.class);
+            } catch (JsonProcessingException e) {
+				System.out.println("Error parsing user object.." + e.getMessage());
+                return null;
+            }
+        }
 	}
 
 	@PostMapping("/join/{token}")
 	public void join(@PathVariable String token) {
-		Map<String, String> userObj = getUserObject(token);
+		UserData userObj = getUserObject(token);
 		if(userObj != null) {
-			AudioChannelUnion vc = getAudioChannelUnion(userObj.get("id"));
+			AudioChannelUnion vc = getAudioChannelUnion(userObj.id);
 			if(vc != null) {
 				AudioManager manager = vc.getGuild().getAudioManager();
 				manager.openAudioConnection(vc.asVoiceChannel());
@@ -177,9 +174,9 @@ public class B4DiscordApplication extends ListenerAdapter {
 
 	@GetMapping("/lastMessage/{token}")
 	public String getLastMessage(@PathVariable String token) {
-		Map<String, String> userObj = getUserObject(token);
+		UserData userObj = getUserObject(token);
 		if(userObj != null) {
-			return userLastMessage.getOrDefault(userObj.get("id"), "No messages detected!");
+			return userLastMessage.getOrDefault(userObj.id, "No messages detected!");
 		}
 		return "Not Authorized";
 	}
@@ -212,11 +209,11 @@ public class B4DiscordApplication extends ListenerAdapter {
 
 	@GetMapping("/voiceChannel/{token}")
 	public String getVoiceChannel(@PathVariable String token) {
-		Map<String, String> userObj = getUserObject(token);
+		UserData userObj = getUserObject(token);
 		if(userObj == null) {
 			return "Not Authorized";
 		}
-		AudioChannelUnion voiceChannel = getAudioChannelUnion(userObj.get("id"));
+		AudioChannelUnion voiceChannel = getAudioChannelUnion(userObj.id);
 		if(voiceChannel == null) {
 			return "No voice channel Found";
 		}
